@@ -1,0 +1,121 @@
+# install dockers first FROM the docker website it may not work if its from somewhere else
+
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+enabled=1
+gpgcheck=0
+gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+exclude=kubelet kubeadm kubectl
+EOF
+
+
+sudo setenforce 0
+sudo sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+
+sudo yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+
+sudo systemctl enable --now kubelet
+
+#go as root user
+
+yum install containerd
+
+systemctl start containerd
+systemctl enable containerd
+
+swapoff -a
+
+sudo firewall-cmd --permanent --add-port=6443/tcp
+sudo firewall-cmd --permanent --add-port=2379-2380/tcp
+sudo firewall-cmd --permanent --add-port=10250/tcp
+sudo firewall-cmd --permanent --add-port=10251/tcp
+sudo firewall-cmd --permanent --add-port=10252/tcp
+sudo firewall-cmd --permanent --add-port=10255/tcp
+systemctl reload firewalld
+
+rm -rf /etc/containerd/config.toml
+systemctl restart containerd
+kubeadm init --apiserver-advertise-address=192.168.1.177 --pod-network-cidr=192.168.0.0/16
+
+#192.168.1.177 = your master nodes ip adress
+
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+br_netfilter
+EOF
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+
+sudo sysctl -system
+
+sed -i "s/cgroupDriver: systemd/cgroupDriver: cgroupfs/g" /var/lib/kubelet/config.yaml
+
+systemctl daemon-reload
+
+systemctl restart kubelet
+
+vi /etc/docker/daemon.json
+
+# insert this in the file
+{
+     "exec-opts": ["native.cgroupdriver=systemd']
+}
+
+systemctl daemon-reload
+systemctl restart docker
+
+kubeadm reset
+
+kubeadm init --apiserver-advertise-address=192.168.1.177 --pod-network-cidr=192.168.0.0/16
+
+#192.168.1.177 = your master nodes ip adress
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+
+# will need calico to configure kubernets network its a yml file need to do the kubctl apply calico evrytime you turn off vm
+
+curl https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml -O
+
+kubectl apply -f calico.yaml
+
+# on worker node 
+
+swapoff -a
+setenforce 0
+systemctl stop firewalld
+
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+enabled=1
+gpgcheck=0
+gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+exclude=kubelet kubeadm kubectl
+EOF
+
+sudo yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+
+sudo systemctl enable --now kubelet
+
+vi /etc/docker/daemon.json
+
+# insert this in the file
+{
+     "exec-opts": ["native.cgroupdriver=systemd']
+}
+
+#then do kubeadm join code from master node
+# if runs into trouble then can run these two commands 
+rm -rf /etc/containerd/config.toml
+systemctl restart containerd
